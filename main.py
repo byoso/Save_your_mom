@@ -1,29 +1,18 @@
 #! /usr/bin/env python3
 
-import gi.repository
-gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk
-
-
-from api import add_media, get_medias, get_media_by_id, delete_media_by_id, _delete_all_medias, get_first_media
-
+from interface import App
+from api import add_media, get_medias, delete_media_by_id, get_media_by_id, get_first_media, _delete_all_medias
 
 def main():
-    pass
-
-
-
-
-
-
+    App().run()
 
 
 
 def test():
     print("main...")
-    # add_media("Test", "Wrong test media", "test/toto")
-    # add_media("Test", "Right test media", "test/target/main")
-    # add_media("Test", "Right test media", "test/target/secondary")
+    # add_media("Test", "Wrong test media", "fake/toto")
+    # add_media("Test", "Right test media", "fake/target/main")
+    # add_media("Test", "Right test media", "fake/target/secondary")
 
     # print(f"OK: {get_media_by_id('72c1f54c-a369-4c84-8134-8f69f3df56ea')}")
     # print(f"KO: {get_media_by_id('fake')}")
