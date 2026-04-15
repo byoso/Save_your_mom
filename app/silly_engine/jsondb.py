@@ -2,6 +2,7 @@
 
 """
 Version:
+- 1.1.2: bugfix in _id attribution in Collection.insert() and Collection.update()
 - 1.1.1: support custom dataclass for input/output
 - 1.0.0
 Use a json file as a database, read the docstrings to know more.
@@ -90,7 +91,7 @@ class Version:
 
 class Item:
     def __init__(self, data: dict | Any, collection: Collection, _id=None) -> None:
-        # prefer explicit id if provided, otherwise preserve existing data['_id'] or create new
+        # Priority is explicit _id parameter, then data['_id'], then a new UUID.
         if _id is not None:
             self._id = _id
         elif isinstance(data, dict) and data.get("_id") is not None:
@@ -305,13 +306,15 @@ class Collection(Generic[OutputModel]):
             raise JsonDbError(f"Output formatting error for collection '{self.name}': {e}")
 
     def insert(self, input_data: dict | Any | OutputModel, _id=None) -> Item | OutputModel:
-        """Add an item to the collection"""
+        """Add an item to the collection.
+
+        ID resolution order:
+        1. Use explicit `_id` argument when provided (used by `load()` to restore keys).
+        2. Otherwise, preserve `_id` present in `input_data` when available.
+        3. Otherwise, let `Item` generate a new UUID.
+        """
         if is_dataclass(input_data) and not isinstance(input_data, type):
             input_data = asdict(input_data)
-
-        # Exclude '_id' field as it's redundant with the generated id
-        if isinstance(input_data, dict) and "_id" in input_data:
-            del input_data["_id"]
 
         item = Item(input_data, self, _id=_id)
         self.data[item._id] = item

@@ -31,9 +31,36 @@
 }
 
 .media-row {
-	border-bottom: 1px solid #e6ece7;
-	padding-top: 0;
-	padding-bottom: 0;
+  border: 3px solid #cacaca;
+  border-radius: 5px;
+  background-image: none;
+  background-color: transparent;
+  padding-top: 0;
+  padding-bottom: 0;
+  margin-top: 5px;
+  margin-bottom: 0;
+  margin-left: 5px;
+  margin-right: 5px;
+}
+
+.media-row-selected {
+  border: 3px solid #26c465;
+  background-image: none;
+  background-color: transparent;
+}
+
+.media-row:focus {
+  border: 3px solid #26c465;
+  background-image: none;
+  background-color: transparent;
+}
+
+.save-row,
+.save-row:selected,
+.save-row:focus {
+  border: none;
+  background-image: none;
+  background-color: transparent;
 }
 
 .media-name {
@@ -95,6 +122,10 @@
   border: 1px solid #3a6a8a;
   border-radius: 8px;
   padding: 6px 10px;
+}
+
+.op-spinner {
+  color: #4a7fa5;
 }
 
 .refresh-button:hover {
@@ -206,4 +237,29 @@
 
 .save-row-delete-button:active {
   background-color: #aa1c1c;
+}
+
+.simple-use-center-row {
+  border: 2px solid #cadbcf;
+  border-radius: 14px;
+  background-color: rgba(255, 255, 255, 0.78);
+  padding: 24px 28px;
+}
+
+.simple-use-device-button {
+  padding: 8px;
+}
+
+.simple-use-device-icon {
+  color: #153022;
+}
+
+.simple-use-arrow-button {
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+
+.simple-use-separator {
+  font-size: 26px;
+  letter-spacing: 2px;
 }

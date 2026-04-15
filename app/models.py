@@ -7,6 +7,8 @@ from silly_engine.jsondb import JsonDb, Collection
 
 
 # Local DB
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 
 @dataclass
 class Setting(ValidatedWithId):
@@ -18,7 +20,7 @@ class Setting(ValidatedWithId):
 class Media(ValidatedWithId):
     """Medias will be saved on the local DB"""
     name: str = "-No Name-"
-    desctiption: str = ""
+    description: str = ""
     path: str = ""
 
 # Target DB
@@ -44,7 +46,7 @@ def _migrate_paths_to_tilde(db):
 
 
 local_media_db = JsonDb(
-    "local_media_db.json",
+    os.path.join(_BASE_DIR, "database","local_media_db.json"),
     autosave=True,
     version="0.1.0",
     migrations={"0.1.0": _migrate_paths_to_tilde},

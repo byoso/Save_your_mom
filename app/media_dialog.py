@@ -2,12 +2,69 @@ import os
 from pathlib import Path
 from typing import Optional
 import gi
+from api import get_saves
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _is_within_path(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_removable_mount_path(path: Path) -> bool:
+    removable_roots = [
+        Path("/media"),
+        Path("/run/media"),
+        Path("/mnt"),
+    ]
+    for root in removable_roots:
+        resolved_root = root.resolve()
+        if _is_within_path(path, resolved_root):
+            return True
+    return False
+
+
+def _build_existing_save_path_conflict(
+    new_path: Path,
+    existing_saves,
+    path_attr: str,
+    path_label: str,
+) -> Optional[str]:
+    for existing_save in existing_saves:
+        existing_path_raw = getattr(existing_save, path_attr, "")
+        if not existing_path_raw:
+            continue
+
+        existing_path = Path(existing_path_raw).expanduser().resolve()
+        save_name = getattr(existing_save, "name", "-No Name-")
+
+        if new_path == existing_path:
+            return (
+                f'{path_label} conflicts with existing save "{save_name}": '
+                "path is identical."
+            )
+
+        if _is_within_path(new_path, existing_path):
+            return (
+                f'{path_label} conflicts with existing save "{save_name}": '
+                "path is inside the existing save path."
+            )
+
+        if _is_within_path(existing_path, new_path):
+            return (
+                f'{path_label} conflicts with existing save "{save_name}": '
+                "path contains the existing save path."
+            )
+
+    return None
 
 
 class AddMediaDialog(Gtk.Dialog):
@@ -150,6 +207,73 @@ class DeleteMediaDialog(Gtk.Dialog):
         content.add(message)
 
         self.show_all()
+
+
+class EditMediaDialog(Gtk.Dialog):
+    def __init__(self, parent, current_name: str, current_description: str):
+        super().__init__(title="Edit media", transient_for=parent, modal=True)
+
+        self.set_default_size(480, 160)
+        self.set_resizable(False)
+        self.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        self.add_button("Save", Gtk.ResponseType.OK)
+        self.set_default_response(Gtk.ResponseType.OK)
+
+        content = self.get_content_area()
+        content.set_spacing(12)
+        content.set_margin_top(16)
+        content.set_margin_bottom(16)
+        content.set_margin_start(16)
+        content.set_margin_end(16)
+
+        grid = Gtk.Grid(column_spacing=10, row_spacing=10)
+        grid.set_hexpand(True)
+        content.add(grid)
+
+        name_label = Gtk.Label(label="Name")
+        name_label.set_xalign(0)
+        self.name_entry = Gtk.Entry()
+        self.name_entry.set_hexpand(True)
+        self.name_entry.set_text(current_name)
+        self.name_entry.set_activates_default(True)
+
+        description_label = Gtk.Label(label="Description")
+        description_label.set_xalign(0)
+        self.description_entry = Gtk.Entry()
+        self.description_entry.set_hexpand(True)
+        self.description_entry.set_text(current_description)
+
+        grid.attach(name_label, 0, 0, 1, 1)
+        grid.attach(self.name_entry, 1, 0, 1, 1)
+
+        grid.attach(description_label, 0, 1, 1, 1)
+        grid.attach(self.description_entry, 1, 1, 1, 1)
+
+        self.show_all()
+
+    def get_media_data(self):
+        name = self.name_entry.get_text().strip()
+        description = self.description_entry.get_text().strip()
+
+        if not name:
+            self._show_error("Name is required.")
+            return None
+
+        return {
+            "name": name,
+            "description": description,
+        }
+
+    def _show_error(self, message):
+        error_dialog = Gtk.MessageDialog(
+            transient_for=self,
+            modal=True,
+            message_type=Gtk.MessageType.ERROR,
+            buttons=Gtk.ButtonsType.OK,
+            text=message,
+        )
+        error_dialog.run()
+        error_dialog.destroy()
 
 
 class DeleteSaveDialog(Gtk.Dialog):
@@ -340,18 +464,70 @@ class AddSaveDialog(Gtk.Dialog):
             self._show_error("Destination path (To) must point to an existing folder.")
             return None
 
-        media_path = getattr(self.selected_media, "path", "")
-        media_root = Path(media_path).expanduser().resolve() if media_path else None
+        local_abs = Path(local_path).expanduser().resolve()
         target_abs = Path(target_path).expanduser().resolve()
+        media_root = (Path.home() / "media").resolve()
+        selected_media_path = getattr(self.selected_media, "path", "")
+        selected_media_root = Path(selected_media_path).expanduser().resolve() if selected_media_path else None
 
-        if media_root is None or not media_root.is_dir():
-            self._show_error("Selected media is unavailable.")
+        if _is_within_path(local_abs, media_root):
+            self._show_error(
+                "Source path (From) must be outside ~/media.\n"
+                "Local backups must stay on the PC."
+            )
             return None
 
-        try:
-            target_abs.relative_to(media_root)
-        except ValueError:
-            self._show_error(f"Target path must be inside selected media: {media_path}")
+        if _is_removable_mount_path(local_abs):
+            self._show_error(
+                "Source path (From) cannot be on a removable media mount.\n"
+                "Please choose a folder on the PC internal storage."
+            )
+            return None
+
+        if selected_media_root is not None and _is_within_path(local_abs, selected_media_root):
+            self._show_error(
+                "Source path (From) cannot be inside the selected media path."
+            )
+            return None
+
+        if local_abs == target_abs:
+            self._show_error(
+                "Source path (From) and destination path (To) cannot be identical."
+            )
+            return None
+
+        if _is_within_path(local_abs, target_abs):
+            self._show_error(
+                "Source path (From) cannot be inside destination path (To)."
+            )
+            return None
+
+        if _is_within_path(target_abs, local_abs):
+            self._show_error(
+                "Destination path (To) cannot be inside source path (From)."
+            )
+            return None
+
+        existing_saves = get_saves(self.selected_media)
+
+        local_conflict = _build_existing_save_path_conflict(
+            new_path=local_abs,
+            existing_saves=existing_saves,
+            path_attr="local_path",
+            path_label="Source path (From)",
+        )
+        if local_conflict:
+            self._show_error(local_conflict)
+            return None
+
+        target_conflict = _build_existing_save_path_conflict(
+            new_path=target_abs,
+            existing_saves=existing_saves,
+            path_attr="target_path",
+            path_label="Destination path (To)",
+        )
+        if target_conflict:
+            self._show_error(target_conflict)
             return None
 
         return {
@@ -370,3 +546,97 @@ class AddSaveDialog(Gtk.Dialog):
         )
         error_dialog.run()
         error_dialog.destroy()
+
+
+class RenameReportDialog(Gtk.Dialog):
+    def __init__(self, parent, save_name: str, renames: list):
+        super().__init__(title="Incident report", transient_for=parent, modal=False)
+        self.set_default_size(600, 360)
+        self.add_button("OK", Gtk.ResponseType.OK)
+        self.set_default_response(Gtk.ResponseType.OK)
+        self.connect("response", lambda dialog, _response: dialog.destroy())
+
+        content = self.get_content_area()
+        content.set_spacing(12)
+        content.set_margin_top(16)
+        content.set_margin_bottom(16)
+        content.set_margin_start(16)
+        content.set_margin_end(16)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_vexpand(True)
+
+        text_view = Gtk.TextView()
+        text_view.set_editable(False)
+        text_view.set_cursor_visible(False)
+        text_view.set_monospace(True)
+        text_view.set_wrap_mode(Gtk.WrapMode.NONE)
+
+        buf = text_view.get_buffer()
+        rename_entries = []
+        error_entries = []
+        other_entries = []
+
+        for reason, original, final in renames:
+            entry_save_name = save_name
+            entry_reason = reason
+            if " | save: " in reason:
+                entry_reason, entry_save_name = reason.split(" | save: ", 1)
+                entry_reason = entry_reason.strip()
+                entry_save_name = entry_save_name.strip() or save_name
+
+            reason_lower = entry_reason.lower()
+            if reason_lower.startswith("error"):
+                error_entries.append((entry_save_name, entry_reason, original, final))
+            elif "collision" in reason_lower or "conflict" in reason_lower:
+                rename_entries.append((entry_save_name, entry_reason, original, final))
+            else:
+                other_entries.append((entry_save_name, entry_reason, original, final))
+
+        report_lines = ["Incident report"]
+
+        if rename_entries:
+            report_lines.append("")
+            report_lines.append("[Rename incidents]")
+            report_lines.append("Some files or folders were renamed to avoid conflicts on the destination filesystem.")
+            report_lines.append("")
+            for entry_save_name, entry_reason, original, final in rename_entries:
+                report_lines.append(
+                    f"[Save: {entry_save_name}]\n[{entry_reason}]\n  {original!r}  ->  {final!r}"
+                )
+                report_lines.append("")
+            report_lines.append("_" * 20)
+
+        if error_entries:
+            report_lines.append("")
+            report_lines.append("[Error incidents]")
+            report_lines.append("")
+            for entry_save_name, entry_reason, original, _final in error_entries:
+                report_lines.append(
+                    f"[Save: {entry_save_name}]\n[{entry_reason}]\n  {original}"
+                )
+                report_lines.append("")
+            report_lines.append("_" * 20)
+
+        if other_entries:
+            report_lines.append("")
+            report_lines.append("[Other incidents]")
+            report_lines.append("")
+            for entry_save_name, entry_reason, original, final in other_entries:
+                report_lines.append(
+                    f"[Save: {entry_save_name}]\n[{entry_reason}]\n  {original!r}  ->  {final!r}"
+                )
+                report_lines.append("")
+            report_lines.append("_" * 20)
+
+        if not rename_entries and not error_entries and not other_entries:
+            report_lines.append("")
+            report_lines.append("No incident to report.")
+
+        buf.set_text("\n".join(report_lines).rstrip())
+
+        scrolled.add(text_view)
+        content.add(scrolled)
+
+        self.show_all()

@@ -1,6 +1,10 @@
-# Save Your Mom !
+
+# Save Your Mom !
 
 Your Mom (like mine) is struggling to make her backups ? Ok, let's simplify this with an application.
+
+
+![screenshot](doc/screenshot.png)
 
 
 # how it works
@@ -13,10 +17,15 @@ Run the app, you know what to do, it is simple... Just play a bit with it before
 
 The local DB contains the Medias registered, the one on the Media contains the paths of the saves.
 
-## ok but why the hell 2 databases ?
+## Ok but why the hell 2 databases ?
 
-Well, my mom's old PC will probably give its last breath soon... So, with the database stored in the media, instead of recreating each parametered saves manually, I'll just add the already existing media in the app, and magically, all the path for the saves are back.
+Well, my mom's old PC will probably give its last breath soon... So, with the database stored in the media, instead of recreating each parametered save manually, I'll just add the already existing media in the app, and magically, all the path for the saves are back.
 
 
 
-Don't thank me, your mom's will.
+Don't thank me, your mom will.
+
+
+# Changelog
+
+- 1.0.0: That works fine !
