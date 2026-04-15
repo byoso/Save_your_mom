@@ -17,6 +17,7 @@ from api import (
     delete_save_by_id,
     rename_save,
 )
+from backups_logic import copy_local_to_target, copy_target_to_local, BackupLogicError
 from media_dialog import AddMediaDialog, DeleteMediaDialog, AddSaveDialog, DeleteSaveDialog, RenameSaveDialog
 
 APP_TITLE = "Save Your Mom (and mine !)"
@@ -128,10 +129,10 @@ class SaveRow(Gtk.ListBoxRow):
         center_group.pack_start(pc_button, False, False, 0)
 
         arrow_right = Gtk.Button()
-        arrow_right.set_tooltip_text("Copy to media (coming soon)")
+        arrow_right.set_tooltip_text("Copy to media")
         arrow_right.add(Gtk.Image.new_from_icon_name("go-next-symbolic", Gtk.IconSize.BUTTON))
         arrow_right.get_style_context().add_class("save-row-arrow-right")
-        arrow_right.set_sensitive(False)
+        arrow_right.connect("clicked", self._on_arrow_right_clicked)
         center_group.pack_start(arrow_right, False, False, 0)
 
         separator_label = Gtk.Label(label="•••••••")
@@ -141,10 +142,10 @@ class SaveRow(Gtk.ListBoxRow):
         center_group.pack_start(separator_label, False, False, 0)
 
         arrow_left = Gtk.Button()
-        arrow_left.set_tooltip_text("Restore from media (coming soon)")
+        arrow_left.set_tooltip_text("Restore from media")
         arrow_left.add(Gtk.Image.new_from_icon_name("go-previous-symbolic", Gtk.IconSize.BUTTON))
         arrow_left.get_style_context().add_class("save-row-arrow-left")
-        arrow_left.set_sensitive(False)
+        arrow_left.connect("clicked", self._on_arrow_left_clicked)
         arrow_left.set_margin_end(28)
         center_group.pack_start(arrow_left, False, False, 0)
 
@@ -224,6 +225,35 @@ class SaveRow(Gtk.ListBoxRow):
                 self.on_set_status(f"Error opening file explorer: {e}")
         else:
             self.on_set_status("Path does not exist")
+
+    def _on_arrow_right_clicked(self, _button):
+        try:
+            copy_local_to_target(
+                local_path=self.save.local_path,
+                target_path=self.save.target_path,
+                media_path=self.media.path,
+                overwrite=True,
+            )
+            self.on_refresh_saves()
+            self.on_set_status("Copy complete: local_path to target_path")
+        except BackupLogicError as e:
+            self.on_set_status(str(e))
+        except Exception as e:
+            self.on_set_status(f"Copy failed: {e}")
+
+    def _on_arrow_left_clicked(self, _button):
+        try:
+            copy_target_to_local(
+                target_path=self.save.target_path,
+                local_path=self.save.local_path,
+                overwrite=True,
+            )
+            self.on_refresh_saves()
+            self.on_set_status("Restore complete: target_path to local_path")
+        except BackupLogicError as e:
+            self.on_set_status(str(e))
+        except Exception as e:
+            self.on_set_status(f"Restore failed: {e}")
 
     def _on_delete_clicked(self, _button):
         dialog = DeleteSaveDialog(self.parent_window, self.save.name)
