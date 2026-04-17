@@ -19,6 +19,8 @@ from api import (
     add_save,
     delete_save_by_id,
     rename_save,
+    set_save_local_binding,
+    sync_media_metadata_to_support,
 )
 from backups_logic import copy_local_to_target, copy_target_to_local, BackupLogicError
 from media_dialog import (
@@ -137,15 +139,23 @@ class SaveRow(Gtk.ListBoxRow):
         center_group.set_hexpand(True)
 
         # Local path validity indicator (left of PC button)
-        local_is_valid = os.path.isdir(os.path.expanduser(save.local_path))
+        local_path = getattr(save, "local_path", "")
+        local_is_configured = bool(local_path)
+        local_is_valid = local_is_configured and os.path.isdir(os.path.expanduser(local_path))
         local_icon_name = "emblem-ok-symbolic" if local_is_valid else "window-close-symbolic"
         local_icon_class = "media-valid" if local_is_valid else "media-invalid"
         local_validity_icon = Gtk.Image.new_from_icon_name(local_icon_name, Gtk.IconSize.LARGE_TOOLBAR)
         local_validity_icon.get_style_context().add_class(local_icon_class)
+        if not local_is_configured:
+            local_validity_icon.set_tooltip_text("Local path: Not configured")
+        elif not local_is_valid:
+            local_validity_icon.set_tooltip_text("Local path: Missing")
+        else:
+            local_validity_icon.set_tooltip_text("Local path: Ready")
         center_group.pack_start(local_validity_icon, False, False, 0)
 
         pc_button = Gtk.Button()
-        pc_button.set_tooltip_text(save.local_path)
+        pc_button.set_tooltip_text(save.local_path if save.local_path else "Local path not configured")
         pc_button.get_style_context().add_class("save-row-device-button")
         pc_icon = Gtk.Image.new_from_icon_name("computer-symbolic", Gtk.IconSize.LARGE_TOOLBAR)
         pc_icon.get_style_context().add_class("save-row-device-icon")
@@ -233,7 +243,7 @@ class SaveRow(Gtk.ListBoxRow):
         dialog.destroy()
 
     def _on_pc_button_clicked(self, _button, path):
-        # Open file explorer to local_path if it exists, otherwise show status message
+        # Open file explorer to local_path if it exists, otherwise start rebind assistant.
         expanded_path = os.path.expanduser(path)
         if os.path.isdir(expanded_path):
             try:
@@ -241,7 +251,11 @@ class SaveRow(Gtk.ListBoxRow):
             except Exception as e:
                 self.on_set_status(f"Error opening file explorer: {e}")
         else:
-            self.on_set_status("Path does not exist")
+            rebound = self.parent_window._prompt_rebind_save(self.save, self.media)
+            if rebound:
+                self.on_refresh_saves()
+            else:
+                self.on_set_status("Local path is not configured")
 
     def _on_usb_button_clicked(self, _button, path):
         # Open file explorer to target_path if it exists, otherwise show status message
@@ -626,11 +640,12 @@ class App(Gtk.Window):
         return get_media_by_id(media_id)
 
     def _refresh_media_dependent_views(self):
+        media, saves = self._get_selected_media_and_saves()
         self._refresh_selected_media_info()
         self._refresh_selected_media_info_saves()
         self._refresh_selected_media_info_simple_use()
-        self._refresh_saves_list()
-        self._refresh_simple_use_center()
+        self._refresh_saves_list(media=media, saves=saves)
+        self._refresh_simple_use_center(media=media, saves=saves)
         self._update_add_save_button_state()
 
     def _ensure_selected_media_consistency(self):
@@ -715,7 +730,30 @@ class App(Gtk.Window):
                 dialog.show_all()
                 continue
 
-            new_media = add_media(payload["name"], payload["description"], payload["path"])
+            if payload.get("cancelled"):
+                self._set_status("Add media canceled")
+                dialog.show_all()
+                continue
+
+            media_name = str(payload.get("name", "")).strip()
+            media_description = str(payload.get("description", "")).strip()
+            media_path = str(payload.get("path", "")).strip()
+            media_id = payload.get("media_id")
+            media_id = str(media_id).strip() if media_id else None
+            profile_db_name = str(payload.get("profile_db_name", "")).strip()
+
+            if not media_name or not media_path:
+                self._set_status("Invalid media input")
+                dialog.show_all()
+                continue
+
+            new_media = add_media(
+                media_name,
+                media_description,
+                media_path,
+                media_id=media_id,
+                profile_db_name=profile_db_name,
+            )
             dialog.destroy()
             self._select_media_by_id(new_media._id, new_media.name)
             self._set_status(f"Media added: {new_media.name}")
@@ -875,6 +913,20 @@ class App(Gtk.Window):
         return _on_file_progress
 
     def _start_save_operation(self, save: Save, media, to_media: bool):
+        if to_media and not os.path.isdir(os.path.expanduser(save.local_path)):
+            rebound = self._prompt_rebind_save(save, media)
+            if not rebound:
+                self._set_status(f"Local path not configured for {save.name}")
+                return
+
+            refreshed_save = None
+            for candidate in get_saves(media):
+                if candidate._id == save._id:
+                    refreshed_save = candidate
+                    break
+            if refreshed_save is not None:
+                save = refreshed_save
+
         action = "Saving" if to_media else "Restoring"
         self._queue_status_update(f"{action} {save.name}...")
         self._op_spinners_start()
@@ -883,6 +935,7 @@ class App(Gtk.Window):
             progress_cb = self._make_file_progress_callback(action, save.name)
             try:
                 if to_media:
+                    sync_media_metadata_to_support(media)
                     incidents = copy_local_to_target(
                         local_path=save.local_path,
                         target_path=save.target_path,
@@ -948,8 +1001,11 @@ class App(Gtk.Window):
             style_context.add_class("media-invalid")
             style_context.remove_class("media-valid")
 
-    def _refresh_simple_use_center(self):
-        media, saves = self._get_selected_media_and_saves()
+    def _refresh_simple_use_center(self, media=None, saves: list[Save] | None = None):
+        if media is None or saves is None:
+            media, saves = self._get_selected_media_and_saves()
+
+        assert saves is not None
         all_on_pc, all_on_usb = self._compute_simple_use_aggregate_status(saves)
 
         self._set_simple_use_status_icon(self.simple_use_left_status_icon, all_on_pc)
@@ -1017,8 +1073,22 @@ class App(Gtk.Window):
             self._set_status("No saves available for selected media")
             return
 
+        skipped_rebind: list[str] = []
+        saves_to_process = saves
+        if to_media:
+            saves_to_process, skipped_rebind = self._prepare_batch_saves_for_media_copy(media, saves)
+            if not saves_to_process:
+                if skipped_rebind:
+                    skipped_count = len(skipped_rebind)
+                    self._set_status(
+                        f"Batch canceled: {skipped_count} save(s) require local rebind"
+                    )
+                else:
+                    self._set_status("No save ready for batch copy")
+                return
+
         action = "Saving" if to_media else "Restoring"
-        self._queue_status_update(f"{action} {saves[0].name}...")
+        self._queue_status_update(f"{action} {saves_to_process[0].name}...")
         self._op_spinners_start()
 
         def _worker():
@@ -1027,11 +1097,12 @@ class App(Gtk.Window):
             errors: list[str] = []
             incident_entries: list[tuple[str, str, str]] = []
 
-            for save in saves:
+            for save in saves_to_process:
                 self._queue_status_update(f"{action} {save.name}...")
                 progress_cb = self._make_file_progress_callback(action, save.name)
                 try:
                     if to_media:
+                        sync_media_metadata_to_support(media)
                         incidents = copy_local_to_target(
                             local_path=save.local_path,
                             target_path=save.target_path,
@@ -1061,12 +1132,27 @@ class App(Gtk.Window):
 
             GLib.idle_add(self._refresh_media_dependent_views)
 
+            if skipped_rebind:
+                for save_name in skipped_rebind:
+                    incident_entries.append(
+                        (
+                            f"Skipped (rebind required) | save: {save_name}",
+                            "Local path is not configured",
+                            "",
+                        )
+                    )
+
             if incident_entries:
                 self._queue_incident_report(f"{media.name} (Simple use batch)", incident_entries)
 
             if failure_count == 0:
                 if to_media:
-                    self._queue_status_update(f"Batch copy complete: {success_count} save(s)")
+                    if skipped_rebind:
+                        self._queue_status_update(
+                            f"Batch copy complete: {success_count} save(s), {len(skipped_rebind)} skipped (rebind required)"
+                        )
+                    else:
+                        self._queue_status_update(f"Batch copy complete: {success_count} save(s)")
                 else:
                     self._queue_status_update(f"Batch restore complete: {success_count} save(s)")
                 GLib.idle_add(self._op_spinners_done)
@@ -1074,6 +1160,8 @@ class App(Gtk.Window):
 
             first_error = errors[0] if errors else "unknown error"
             if to_media:
+                if skipped_rebind:
+                    first_error = f"{first_error}. {len(skipped_rebind)} skipped (rebind required)"
                 self._queue_status_update(
                     f"Batch copy finished with errors ({success_count} ok / {failure_count} failed). First error: {first_error}"
                 )
@@ -1085,6 +1173,35 @@ class App(Gtk.Window):
 
         self._run_in_background(_worker)
 
+    def _prepare_batch_saves_for_media_copy(self, media, saves: list[Save]) -> tuple[list[Save], list[str]]:
+        ready_saves: list[Save] = []
+        skipped_saves: list[str] = []
+
+        for save in saves:
+            if os.path.isdir(os.path.expanduser(save.local_path)):
+                ready_saves.append(save)
+                continue
+
+            self._set_status(f"Local path missing for {save.name}. Please choose a folder.")
+            rebound = self._prompt_rebind_save(save, media)
+            if not rebound:
+                skipped_saves.append(save.name)
+                continue
+
+            refreshed_save = None
+            for candidate in get_saves(media):
+                if candidate._id == save._id:
+                    refreshed_save = candidate
+                    break
+
+            if refreshed_save is None or not os.path.isdir(os.path.expanduser(refreshed_save.local_path)):
+                skipped_saves.append(save.name)
+                continue
+
+            ready_saves.append(refreshed_save)
+
+        return ready_saves, skipped_saves
+
     def _on_simple_use_arrow_right_clicked(self, _button):
         if self._op_animation_running:
             return
@@ -1094,6 +1211,34 @@ class App(Gtk.Window):
         if self._op_animation_running:
             return
         self._run_simple_use_batch(to_media=False)
+
+    def _prompt_rebind_save(self, save: Save, media) -> bool:
+        chooser = Gtk.FileChooserDialog(
+            title=f"Choose local folder for '{save.name}'",
+            transient_for=self,
+            action=Gtk.FileChooserAction.SELECT_FOLDER,
+        )
+        chooser.add_buttons(
+            "Cancel", Gtk.ResponseType.CANCEL,
+            "Bind", Gtk.ResponseType.OK,
+        )
+
+        response = chooser.run()
+        if response != Gtk.ResponseType.OK:
+            chooser.destroy()
+            return False
+
+        selected_folder = chooser.get_filename()
+        chooser.destroy()
+
+        if not selected_folder or not os.path.isdir(selected_folder):
+            self._set_status("Invalid local path selected")
+            return False
+
+        set_save_local_binding(media, save._id, selected_folder)
+        self._refresh_media_dependent_views()
+        self._set_status(f"Local path configured for save: {save.name}")
+        return True
 
     def _sync_simple_use_refresh_button_width(self, *_args):
         if not hasattr(self, "refresh_simple_use_button"):
@@ -1317,17 +1462,18 @@ class App(Gtk.Window):
         self._refresh_media_list()
         self._refresh_media_dependent_views()
 
-    def _refresh_saves_list(self):
+    def _refresh_saves_list(self, media=None, saves: list[Save] | None = None):
         for row in self.saves_list.get_children():
             self.saves_list.remove(row)
 
-        media_id = self._get_selected_media_id()
+        if media is None:
+            media_id = self._get_selected_media_id()
+            if not media_id:
+                self._add_saves_empty_row("No media selected.")
+                return
 
-        if not media_id:
-            self._add_saves_empty_row("No media selected.")
-            return
+            media = get_media_by_id(media_id)
 
-        media = get_media_by_id(media_id)
         if media is None:
             self._add_saves_empty_row("No media selected.")
             return
@@ -1336,7 +1482,9 @@ class App(Gtk.Window):
             self._add_saves_empty_row(f"Media path is unavailable: {media.path}")
             return
 
-        saves = get_saves(media)
+        if saves is None:
+            saves = get_saves(media)
+
         if not saves:
             self._add_saves_empty_row("No saves yet. Add your first one above.")
             return

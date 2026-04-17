@@ -22,16 +22,29 @@ class Media(ValidatedWithId):
     name: str = "-No Name-"
     description: str = ""
     path: str = ""
+    profile_db_name: str = ""
 
 # Target DB
 
 
 @dataclass
 class Save(ValidatedWithId):
-    """Save represents a copy operation from a LocalFolder to a TargetFolder"""
+    """Save metadata stored on media and enriched locally for runtime use."""
     name: str = ""
+    target_rel_path: str = ""
+
+    # Backward-compatible runtime fields. These are computed in the API layer
+    # and can still be present in legacy media databases.
     local_path: str = ""
     target_path: str = ""
+
+
+@dataclass
+class SaveBinding(ValidatedWithId):
+    """Machine-local binding between a media/save pair and a local source path."""
+    media_id: str = ""
+    save_id: str = ""
+    local_path: str = ""
 
 
 def _migrate_paths_to_tilde(db):
@@ -45,11 +58,27 @@ def _migrate_paths_to_tilde(db):
     db.save()
 
 
+def _migrate_media_profile_field(db):
+    """Migration 0.2.0: ensure medias have a profile_db_name field."""
+    medias = db.collection("medias")
+    changed = False
+    for item in medias.data.values():
+        if "profile_db_name" not in item.data:
+            item.data["profile_db_name"] = ""
+            changed = True
+    if changed:
+        db.save()
+
+
 local_media_db = JsonDb(
     os.path.join(_BASE_DIR, "database","local_media_db.json"),
     autosave=True,
-    version="0.1.0",
-    migrations={"0.1.0": _migrate_paths_to_tilde},
+    version="0.2.0",
+    migrations={
+        "0.1.0": _migrate_paths_to_tilde,
+        "0.2.0": _migrate_media_profile_field,
+    },
 )
 Medias: Collection = local_media_db.collection("medias", Media)
 Settings: Collection = local_media_db.collection("settings", Setting) # singleton
+SaveBindings: Collection = local_media_db.collection("save_bindings", SaveBinding)

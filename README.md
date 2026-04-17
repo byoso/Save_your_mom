@@ -27,5 +27,5 @@ Don't thank me, your mom will.
 
 
 # Changelog
-
+- 1.1.0: Multi profiles supported.
 - 1.0.0: That works fine !

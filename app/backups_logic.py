@@ -182,6 +182,7 @@ def _copy_directory_merge(
 	case_sensitive: bool,
 	renames: list,
 	on_file_progress: Callable[[str], None] | None = None,
+	skip_dir_names: set[str] | None = None,
 ) -> None:
 	"""Recursive copy in merge mode.
 	Rules:
@@ -199,6 +200,9 @@ def _copy_directory_merge(
 	used_normalized: set[str] = set(dest_name_map.keys())
 
 	for child in source.iterdir():
+		if child.is_dir() and skip_dir_names and child.name in skip_dir_names:
+			continue
+
 		name_max_bytes = _name_max_bytes_for_dir(destination)
 		entry_name = child.name
 		if len(entry_name.encode("utf-8")) > name_max_bytes:
@@ -228,15 +232,15 @@ def _copy_directory_merge(
 					dst.mkdir(parents=True, exist_ok=False)
 					used_normalized.add(_normalized_name(resolved_name))
 					renames.append((RENAME_REASON_CASE, entry_name, resolved_name))
-					_copy_directory_merge(child, dst, case_sensitive, renames, on_file_progress)
+					_copy_directory_merge(child, dst, case_sensitive, renames, on_file_progress, skip_dir_names)
 				else:
 					dst = destination / entry_name
 					dst.mkdir(parents=True, exist_ok=False)
 					used_normalized.add(normalized_child)
-					_copy_directory_merge(child, dst, case_sensitive, renames, on_file_progress)
+					_copy_directory_merge(child, dst, case_sensitive, renames, on_file_progress, skip_dir_names)
 			elif existing.is_dir():
 				# Dir → existing dir: merge recursively.
-				_copy_directory_merge(child, existing, case_sensitive, renames, on_file_progress)
+				_copy_directory_merge(child, existing, case_sensitive, renames, on_file_progress, skip_dir_names)
 			else:
 				# Dir vs existing file: rename incoming dir with UUID suffix.
 				resolved_name = _with_uuid_suffix_fitted(entry_name, is_dir=True, max_name_bytes=name_max_bytes)
@@ -244,7 +248,7 @@ def _copy_directory_merge(
 				dst.mkdir(parents=True, exist_ok=False)
 				used_normalized.add(_normalized_name(resolved_name))
 				renames.append((RENAME_REASON_TYPE, entry_name, resolved_name))
-				_copy_directory_merge(child, dst, case_sensitive, renames, on_file_progress)
+				_copy_directory_merge(child, dst, case_sensitive, renames, on_file_progress, skip_dir_names)
 
 		else:
 			# Source is a file.
@@ -292,12 +296,16 @@ def _copy_directory_legacy(
 	case_sensitive: bool,
 	renames: list,
 	on_file_progress: Callable[[str], None] | None = None,
+	skip_dir_names: set[str] | None = None,
 ) -> None:
 	"""Recursive copy in legacy mode (destination was purged beforehand).
 	Still handles case-insensitive name collisions among source siblings."""
 	used_normalized: set[str] = set()
 
 	for child in source.iterdir():
+		if child.is_dir() and skip_dir_names and child.name in skip_dir_names:
+			continue
+
 		name_max_bytes = _name_max_bytes_for_dir(destination)
 		entry_name = child.name
 		if len(entry_name.encode("utf-8")) > name_max_bytes:
@@ -324,7 +332,7 @@ def _copy_directory_legacy(
 
 		if child.is_dir():
 			dst.mkdir(parents=True, exist_ok=False)
-			_copy_directory_legacy(child, dst, case_sensitive, renames, on_file_progress)
+			_copy_directory_legacy(child, dst, case_sensitive, renames, on_file_progress, skip_dir_names)
 		else:
 			if on_file_progress:
 				on_file_progress(resolved_name)
@@ -387,11 +395,12 @@ def copy_local_to_target(
 	db_dir = media_root / ".save_your_mom"
 	case_sensitive = _is_case_sensitive_fs(db_dir) if db_dir.is_dir() else True
 	renames: list = []
+	skipped_dir_names = {".save_your_mom"}
 
 	if merge_mode:
-		_copy_directory_merge(source, destination, case_sensitive, renames, on_file_progress)
+		_copy_directory_merge(source, destination, case_sensitive, renames, on_file_progress, skipped_dir_names)
 	else:
-		_copy_directory_legacy(source, destination, case_sensitive, renames, on_file_progress)
+		_copy_directory_legacy(source, destination, case_sensitive, renames, on_file_progress, skipped_dir_names)
 
 	return renames
 
@@ -419,10 +428,11 @@ def copy_target_to_local(
 	# For local path, test FS sensitivity at the destination's parent.
 	case_sensitive = _is_case_sensitive_fs(destination.parent)
 	renames: list = []
+	skipped_dir_names = {".save_your_mom"}
 
 	if merge_mode:
-		_copy_directory_merge(source, destination, case_sensitive, renames, on_file_progress)
+		_copy_directory_merge(source, destination, case_sensitive, renames, on_file_progress, skipped_dir_names)
 	else:
-		_copy_directory_legacy(source, destination, case_sensitive, renames, on_file_progress)
+		_copy_directory_legacy(source, destination, case_sensitive, renames, on_file_progress, skipped_dir_names)
 
 	return renames

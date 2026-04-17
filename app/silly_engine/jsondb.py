@@ -2,6 +2,7 @@
 
 """
 Version:
+- 1.2.0: support for atomic file writes and crash-safe saving, plus minor bugfixes
 - 1.1.2: bugfix in _id attribution in Collection.insert() and Collection.update()
 - 1.1.1: support custom dataclass for input/output
 - 1.0.0
@@ -216,7 +217,8 @@ class JsonDb:
     def save(self) -> None:
         if self.file is None:
             return
-        dirpath = os.path.dirname(str(self.file))
+        target_path = str(self.file)
+        dirpath = os.path.dirname(target_path)
         self._ensure_dir(dirpath)
         data = {}
         for collection in self.collections:
@@ -227,8 +229,23 @@ class JsonDb:
             json_str = json.dumps(data, indent=2)
         except (TypeError, ValueError) as e:
             raise JsonDbError(e)
-        with open(self.file, 'w') as file:
-            file.write(json_str)
+
+        temp_path = f"{target_path}.{os.getpid()}.{uuid.uuid4().hex}.jsondb-write-tmp"
+        try:
+            with open(temp_path, 'w', encoding='utf-8') as file:
+                file.write(json_str)
+                file.flush()
+                os.fsync(file.fileno())
+
+            # Atomic replace on the same filesystem.
+            os.replace(temp_path, target_path)
+        except OSError as e:
+            try:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+            except OSError:
+                pass
+            raise JsonDbError(e)
 
     def load(self) -> None:
         if self.file is None:

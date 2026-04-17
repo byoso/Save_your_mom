@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from typing import Optional
 import gi
-from api import get_saves
+from api import get_saves, discover_media_profiles
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
@@ -147,14 +147,6 @@ class AddMediaDialog(Gtk.Dialog):
         name = self.name_entry.get_text().strip()
         description = self.description_entry.get_text().strip()
         path = self.path_entry.get_text().strip()
-        # Normalize path: store with ~/ when inside home directory
-        home = os.path.expanduser("~")
-        if path.startswith(home + "/"):
-            path = "~/" + path[len(home) + 1:]
-
-        if not name:
-            self._show_error("Name is required.")
-            return None
 
         if not path:
             self._show_error("Path is required.")
@@ -164,11 +156,121 @@ class AddMediaDialog(Gtk.Dialog):
             self._show_error("Path must point to an existing folder.")
             return None
 
-        return {
+        import_choice = None
+        profiles = discover_media_profiles(path)
+        if profiles:
+            chooser = MediaProfileChoiceDialog(self, profiles)
+            response = chooser.run()
+            if response != Gtk.ResponseType.OK:
+                chooser.destroy()
+                return {"cancelled": True}
+            import_choice = chooser.get_choice()
+            chooser.destroy()
+
+            if import_choice["mode"] == "import":
+                selected_profile = import_choice["profile"]
+                if not name:
+                    name = selected_profile.get("name", "")
+                if not description:
+                    description = selected_profile.get("description", "")
+
+        if not name:
+            self._show_error("Name is required.")
+            return None
+
+        # Normalize path: store with ~/ when inside home directory
+        home = os.path.expanduser("~")
+        if path.startswith(home + "/"):
+            path = "~/" + path[len(home) + 1:]
+
+        payload = {
             "name": name,
             "description": description,
             "path": path,
         }
+
+        if import_choice and import_choice["mode"] == "import":
+            selected_profile = import_choice["profile"]
+            payload["media_id"] = selected_profile.get("media_id", "")
+            payload["profile_db_name"] = selected_profile.get("profile_db_name", "")
+
+        return payload
+
+
+class MediaProfileChoiceDialog(Gtk.Dialog):
+    def __init__(self, parent, profiles: list[dict[str, str]]):
+        super().__init__(title="Media profiles found", transient_for=parent, modal=True)
+        self.profiles = profiles
+
+        self.set_default_size(520, 220)
+        self.set_resizable(False)
+        self.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        self.add_button("Continue", Gtk.ResponseType.OK)
+        self.set_default_response(Gtk.ResponseType.OK)
+
+        content = self.get_content_area()
+        content.set_spacing(10)
+        content.set_margin_top(16)
+        content.set_margin_bottom(16)
+        content.set_margin_start(16)
+        content.set_margin_end(16)
+
+        message = Gtk.Label(
+            label=(
+                "Backup profiles were found in this media folder.\n"
+                "Choose whether to create a new profile or import an existing one."
+            )
+        )
+        message.set_xalign(0)
+        content.add(message)
+
+        self.create_radio = Gtk.RadioButton.new_with_label_from_widget(None, "Create a new media profile")
+        self.import_radio = Gtk.RadioButton.new_with_label_from_widget(
+            self.create_radio,
+            "Import an existing media profile",
+        )
+        self.import_radio.set_active(True)
+
+        content.add(self.create_radio)
+        content.add(self.import_radio)
+
+        profile_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        profile_label = Gtk.Label(label="Existing profile")
+        profile_label.set_xalign(0)
+        self.profile_combo = Gtk.ComboBoxText()
+        self.profile_combo.set_hexpand(True)
+
+        for profile in profiles:
+            profile_name = profile.get("name", "") or "-No Name-"
+            profile_desc = profile.get("description", "")
+            profile_file = profile.get("profile_db_name", "")
+            label = f"{profile_name} ({profile_file})"
+            if profile_desc:
+                label = f"{label} - {profile_desc}"
+            self.profile_combo.append_text(label)
+
+        self.profile_combo.set_active(0)
+        profile_box.pack_start(profile_label, False, False, 0)
+        profile_box.pack_start(self.profile_combo, True, True, 0)
+        content.add(profile_box)
+
+        self.create_radio.connect("toggled", self._on_mode_changed)
+        self.import_radio.connect("toggled", self._on_mode_changed)
+        self._on_mode_changed(None)
+
+        self.show_all()
+
+    def _on_mode_changed(self, _button):
+        self.profile_combo.set_sensitive(self.import_radio.get_active())
+
+    def get_choice(self) -> dict:
+        if self.create_radio.get_active():
+            return {"mode": "create", "profile": None}
+
+        selected_index = self.profile_combo.get_active()
+        if selected_index < 0 or selected_index >= len(self.profiles):
+            return {"mode": "create", "profile": None}
+        return {"mode": "import", "profile": self.profiles[selected_index]}
 
     def _show_error(self, message):
         error_dialog = Gtk.MessageDialog(
