@@ -200,6 +200,9 @@ def _copy_directory_merge(
 	used_normalized: set[str] = set(dest_name_map.keys())
 
 	for child in source.iterdir():
+		if child.is_symlink():
+			continue
+
 		if child.is_dir() and skip_dir_names and child.name in skip_dir_names:
 			continue
 
@@ -303,6 +306,9 @@ def _copy_directory_legacy(
 	used_normalized: set[str] = set()
 
 	for child in source.iterdir():
+		if child.is_symlink():
+			continue
+
 		if child.is_dir() and skip_dir_names and child.name in skip_dir_names:
 			continue
 
