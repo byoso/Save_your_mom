@@ -78,7 +78,7 @@ options = [
 # optional pre installation/uninstallation script files (e.g. "scripts/pre_install.sh")
 pre_install_script = ""
 post_install_script = ""
-pre_uninstall_script = ""
+pre_uninstall_script = "_installation/pre_uninstall.sh"
 
 # you're done ! :)
 

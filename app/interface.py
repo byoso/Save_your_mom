@@ -23,6 +23,7 @@ from api import (
     sync_media_metadata_to_support,
 )
 from backups_logic import copy_local_to_target, copy_target_to_local, BackupLogicError
+from constants import VERSION
 from media_dialog import (
     AddMediaDialog,
     DeleteMediaDialog,
@@ -35,7 +36,7 @@ from media_dialog import (
 
 from models import Medias, Settings, Save
 
-APP_TITLE = "Save Your Mom (and mine !)"
+APP_TITLE = f"Save Your Mom (and mine !) v{VERSION}"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 class MediaRow(Gtk.ListBoxRow):
@@ -912,6 +913,31 @@ class App(Gtk.Window):
 
         return _on_file_progress
 
+    def _validate_destination_path(self, save: Save, to_media: bool) -> str | None:
+        destination_label = "target" if to_media else "local"
+        destination_path = save.target_path if to_media else save.local_path
+
+        if not destination_path or not destination_path.strip():
+            return f"{destination_label.capitalize()} destination is empty"
+
+        expanded_path = os.path.expanduser(destination_path)
+        if to_media and not os.path.isdir(expanded_path):
+            target_rel_path = str(getattr(save, "target_rel_path", "")).strip()
+            if target_rel_path:
+                try:
+                    os.makedirs(expanded_path, exist_ok=True)
+                except OSError as e:
+                    return f"Target destination cannot be created: {destination_path} ({e})"
+
+        if not os.path.isdir(expanded_path):
+            return f"{destination_label.capitalize()} destination does not exist: {destination_path}"
+
+        return None
+
+    def _build_destination_skip_incident(self, save: Save, to_media: bool, reason: str) -> tuple[str, str, str]:
+        operation = "copy" if to_media else "restore"
+        return (f"Skipped ({operation}) | save: {save.name}", reason, "")
+
     def _start_save_operation(self, save: Save, media, to_media: bool):
         if to_media and not os.path.isdir(os.path.expanduser(save.local_path)):
             rebound = self._prompt_rebind_save(save, media)
@@ -926,6 +952,15 @@ class App(Gtk.Window):
                     break
             if refreshed_save is not None:
                 save = refreshed_save
+
+        destination_error = self._validate_destination_path(save, to_media)
+        if destination_error:
+            self._set_status(f"Operation skipped for {save.name}: {destination_error}")
+            self._queue_incident_report(
+                save.name,
+                [self._build_destination_skip_incident(save, to_media, destination_error)],
+            )
+            return
 
         action = "Saving" if to_media else "Restoring"
         self._queue_status_update(f"{action} {save.name}...")
@@ -1094,10 +1129,19 @@ class App(Gtk.Window):
         def _worker():
             success_count = 0
             failure_count = 0
+            skipped_destination_count = 0
             errors: list[str] = []
             incident_entries: list[tuple[str, str, str]] = []
 
             for save in saves_to_process:
+                destination_error = self._validate_destination_path(save, to_media)
+                if destination_error:
+                    skipped_destination_count += 1
+                    incident_entries.append(
+                        self._build_destination_skip_incident(save, to_media, destination_error)
+                    )
+                    continue
+
                 self._queue_status_update(f"{action} {save.name}...")
                 progress_cb = self._make_file_progress_callback(action, save.name)
                 try:
@@ -1147,14 +1191,24 @@ class App(Gtk.Window):
 
             if failure_count == 0:
                 if to_media:
-                    if skipped_rebind:
+                    if skipped_rebind or skipped_destination_count:
+                        skipped_parts = []
+                        if skipped_rebind:
+                            skipped_parts.append(f"{len(skipped_rebind)} skipped (rebind required)")
+                        if skipped_destination_count:
+                            skipped_parts.append(f"{skipped_destination_count} skipped (invalid destination)")
                         self._queue_status_update(
-                            f"Batch copy complete: {success_count} save(s), {len(skipped_rebind)} skipped (rebind required)"
+                            f"Batch copy complete: {success_count} save(s), {', '.join(skipped_parts)}"
                         )
                     else:
                         self._queue_status_update(f"Batch copy complete: {success_count} save(s)")
                 else:
-                    self._queue_status_update(f"Batch restore complete: {success_count} save(s)")
+                    if skipped_destination_count:
+                        self._queue_status_update(
+                            f"Batch restore complete: {success_count} save(s), {skipped_destination_count} skipped (invalid destination)"
+                        )
+                    else:
+                        self._queue_status_update(f"Batch restore complete: {success_count} save(s)")
                 GLib.idle_add(self._op_spinners_done)
                 return
 
@@ -1162,10 +1216,14 @@ class App(Gtk.Window):
             if to_media:
                 if skipped_rebind:
                     first_error = f"{first_error}. {len(skipped_rebind)} skipped (rebind required)"
+                if skipped_destination_count:
+                    first_error = f"{first_error}. {skipped_destination_count} skipped (invalid destination)"
                 self._queue_status_update(
                     f"Batch copy finished with errors ({success_count} ok / {failure_count} failed). First error: {first_error}"
                 )
             else:
+                if skipped_destination_count:
+                    first_error = f"{first_error}. {skipped_destination_count} skipped (invalid destination)"
                 self._queue_status_update(
                     f"Batch restore finished with errors ({success_count} ok / {failure_count} failed). First error: {first_error}"
                 )

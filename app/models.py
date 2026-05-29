@@ -1,13 +1,12 @@
 #! /usr/bin/env python3
 
-import os
 from dataclasses import dataclass
 from silly_engine.data_validation import ValidatedWithId
 from silly_engine.jsondb import JsonDb, Collection
-
+from pathlib import Path
 
 # Local DB
-_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_BASE_DIR = Path(__file__).resolve().parent
 
 
 @dataclass
@@ -49,7 +48,7 @@ class SaveBinding(ValidatedWithId):
 
 def _migrate_paths_to_tilde(db):
     """Migration 0.1.0: store media paths with ~/ instead of absolute home paths"""
-    home = os.path.expanduser("~")
+    home = str(Path.home())
     medias = db.collection("medias")
     for item in medias.data.values():
         path = item.data.get("path", "")
@@ -71,7 +70,7 @@ def _migrate_media_profile_field(db):
 
 
 local_media_db = JsonDb(
-    os.path.join(_BASE_DIR, "database","local_media_db.json"),
+    Path("~/.local/share/geninstaller-applications/.data/SaveYourMom/save_your_mom.json").expanduser(),
     autosave=True,
     version="0.2.0",
     migrations={

@@ -1,3 +1,6 @@
 __pycache__/
-fake/
+xxx-*
+xxx-*/
 *.json
+.venv/
+venv/
